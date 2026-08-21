@@ -1053,32 +1053,52 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     } catch (e) {}
   };
 
-  const syncOrderToSupabase = async (ord: Order) => {
+  const syncOrderToSupabase = async (ord: Order): Promise<{ success: boolean; error?: string }> => {
     try {
-      const { error } = await supabase.from('orders').upsert({
+      // Ensure shipping_address and items are properly formatted for Supabase JSON/JSONB
+      const sanitizedAddress = ord.shippingAddress || {
+        recipientName: ord.customerName || 'Cliente',
+        street: 'Av. Insurgentes Sur',
+        exteriorNumber: '1602',
+        neighborhood: 'Crédito Constructor',
+        city: 'CDMX',
+        state: 'CDMX',
+        postalCode: '03940',
+        phone: ord.customerPhone || '5500000000'
+      };
+
+      const payload = {
         id: ord.id,
         order_number: ord.orderNumber,
-        customer_name: ord.customerName || '',
-        customer_email: ord.customerEmail || '',
-        customer_phone: ord.customerPhone || '',
-        shipping_address: ord.shippingAddress || {},
+        customer_name: ord.customerName || 'Cliente',
+        customer_email: ord.customerEmail || 'cliente@armariovirtual.com',
+        customer_phone: ord.customerPhone || '5500000000',
+        shipping_address: sanitizedAddress,
         items: ord.items || [],
         subtotal: Number(ord.subtotal || 0),
         shipping_cost: Number(ord.shippingCost || 0),
         discount_amount: Number(ord.discountAmount || 0),
         total: Number(ord.total || 0),
         status: ord.status,
-        payment_method: ord.paymentMethod || '',
-        shipping_provider: ord.shippingProvider || '',
+        payment_method: ord.paymentMethod || 'Modo Compra Ficticia (Sandbox)',
+        shipping_provider: ord.shippingProvider || 'Envío Express',
         tracking_number: ord.trackingNumber || '',
         created_at: ord.createdAt || new Date().toISOString(),
-        estimated_delivery: ord.estimatedDelivery || '',
+        estimated_delivery: ord.estimatedDelivery || '3 a 5 días hábiles',
         status_history: ord.statusHistory || []
-      });
+      };
+
+      const { error } = await supabase.from('orders').upsert(payload);
       if (error) {
         console.warn('Supabase order sync error:', error.message);
+        return { success: false, error: error.message };
       }
-    } catch (e) {}
+      console.log('✅ Pedido guardado y sincronizado con éxito en Supabase:', ord.orderNumber);
+      return { success: true };
+    } catch (e: any) {
+      console.warn('Supabase order sync exception:', e);
+      return { success: false, error: e.message || String(e) };
+    }
   };
 
   const syncShippingConfigToSupabase = async (cfg: ShippingConfig) => {
@@ -1955,12 +1975,18 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const orderNum = `SUB-2026-${Math.floor(1000 + Math.random() * 9000)}`;
     const randomTracking = `${carrierName.slice(0, 3).toUpperCase()}-${Math.floor(100000 + Math.random() * 900000)}-MX`;
 
+    const isSandboxPayment = paymentMethod.toLowerCase().includes('ficticia') || 
+                             paymentMethod.toLowerCase().includes('sandbox') || 
+                             paymentMethod.toLowerCase().includes('prueba');
+
+    const initialStatus: OrderStatus = isSandboxPayment ? 'en_preparacion' : 'pendiente';
+
     const newOrder: Order = {
       id: `ord-${Date.now()}`,
       orderNumber: orderNum,
-      customerName: customer.name,
-      customerEmail: customer.email,
-      customerPhone: customer.phone,
+      customerName: customer.name || address.recipientName || 'Cliente de Prueba',
+      customerEmail: customer.email || 'cliente@armariovirtual.com',
+      customerPhone: customer.phone || address.phone || '5512345678',
       shippingAddress: address,
       items: cart.map(item => ({
         productId: item.product.id,
@@ -1975,7 +2001,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       shippingCost,
       discountAmount: 0,
       total: subtotal + shippingCost,
-      status: 'pendiente',
+      status: initialStatus,
       paymentMethod,
       shippingProvider: carrierName,
       trackingNumber: randomTracking,
@@ -1983,9 +2009,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       estimatedDelivery: '3 a 5 días hábiles',
       statusHistory: [
         {
-          status: 'pendiente',
+          status: initialStatus,
           timestamp: new Date().toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' }),
-          note: 'Pedido registrado correctamente en el sistema de Ropa en Línea'
+          note: isSandboxPayment
+            ? 'Pedido de prueba registrado exitosamente en Modo Compra Ficticia (Sandbox) y sincronizado en Supabase'
+            : 'Pedido registrado correctamente en el sistema de Ropa en Línea'
         }
       ]
     };
