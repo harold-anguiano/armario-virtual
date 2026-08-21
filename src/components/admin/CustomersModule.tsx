@@ -1,11 +1,40 @@
 import React, { useState } from 'react';
 import { useStore } from '../../context/StoreContext';
 import { Customer } from '../../types';
-import { Users, Search, UserCheck, UserX, Plus, Trash2, Mail, Phone, Calendar, ShoppingBag, MapPin, X, Check, DollarSign, RefreshCw, Database } from 'lucide-react';
+import {
+  Users,
+  Search,
+  UserCheck,
+  UserX,
+  Plus,
+  Trash2,
+  Mail,
+  Phone,
+  Calendar,
+  ShoppingBag,
+  MapPin,
+  X,
+  Check,
+  DollarSign,
+  RefreshCw,
+  Database,
+  UploadCloud
+} from 'lucide-react';
 
 export const CustomersModule: React.FC = () => {
-  const { customersList, toggleCustomerStatus, addCustomerAccount, deleteCustomerAccount, reloadFromSupabase } = useStore();
+  const {
+    customersList,
+    toggleCustomerStatus,
+    addCustomerAccount,
+    deleteCustomerAccount,
+    syncCustomerToSupabase,
+    reloadFromSupabase,
+    seedAllDataToSupabase,
+    showToast
+  } = useStore();
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncingCustId, setSyncingCustId] = useState<string | null>(null);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<'todos' | 'activo' | 'suspendido' | 'inactivo'>('todos');
@@ -16,8 +45,21 @@ export const CustomersModule: React.FC = () => {
     setIsRefreshing(true);
     try {
       await reloadFromSupabase();
+      showToast('🔄 Lista de clientes recargada desde Supabase');
     } finally {
       setIsRefreshing(false);
+    }
+  };
+
+  const handleSyncToSupabase = async () => {
+    setIsSyncing(true);
+    try {
+      await seedAllDataToSupabase();
+      showToast('☁️ Clientes y catálogo sincronizados con Supabase');
+    } catch (e: any) {
+      showToast(`⚠️ Error al sincronizar: ${e.message || e}`);
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -41,11 +83,11 @@ export const CustomersModule: React.FC = () => {
   const totalActive = customersList.filter(c => (c.status || 'activo') === 'activo').length;
   const totalSpentAll = customersList.reduce((acc, curr) => acc + (curr.totalSpent || 0), 0);
 
-  const handleCreateCustomer = (e: React.FormEvent) => {
+  const handleCreateCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !email.trim()) return;
 
-    addCustomerAccount({
+    await addCustomerAccount({
       name,
       email,
       phone,
@@ -84,7 +126,17 @@ export const CustomersModule: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={handleSyncToSupabase}
+            disabled={isSyncing}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black shadow-xs transition-all disabled:opacity-50 active:scale-95 cursor-pointer"
+            title="Subir todos los clientes locales a Supabase"
+          >
+            <UploadCloud className={`w-3.5 h-3.5 ${isSyncing ? 'animate-bounce' : ''}`} />
+            <span>{isSyncing ? 'Subiendo...' : 'Subir a Supabase'}</span>
+          </button>
+
           <button
             onClick={handleRefresh}
             disabled={isRefreshing}
@@ -332,6 +384,24 @@ export const CustomersModule: React.FC = () => {
                       </td>
 
                       <td className="p-4 text-right space-x-1">
+                        <button
+                          onClick={async () => {
+                            setSyncingCustId(cust.id);
+                            const res = await syncCustomerToSupabase(cust);
+                            setSyncingCustId(null);
+                            if (res.success) {
+                              showToast(`☁️ Usuario "${cust.name}" sincronizado en Supabase`);
+                            } else {
+                              showToast(`⚠️ Error al sincronizar: ${res.error || 'Verifica RLS'}`);
+                            }
+                          }}
+                          disabled={syncingCustId === cust.id}
+                          className="px-2.5 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 font-bold rounded-xl transition-all border border-purple-200"
+                          title="Sincronizar este usuario con Supabase"
+                        >
+                          <UploadCloud className={`w-3.5 h-3.5 inline mr-1 ${syncingCustId === cust.id ? 'animate-bounce' : ''}`} />
+                          {syncingCustId === cust.id ? '...' : 'Nube'}
+                        </button>
                         <button
                           onClick={() => setSelectedCustomer(cust)}
                           className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-xl transition-all"

@@ -97,6 +97,7 @@ interface StoreContextType {
   addCustomerAccount: (customerData: Omit<Customer, 'id'>) => void;
   toggleCustomerStatus: (id: string) => void;
   deleteCustomerAccount: (id: string) => void;
+  syncCustomerToSupabase: (customer: Customer) => Promise<{ success: boolean; error?: string }>;
 
   // Store Data
   products: Product[];
@@ -260,9 +261,47 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, [isAdminLoggedIn]);
 
   const adminLogin = (email?: string, password?: string): boolean => {
-    setIsAdminLoggedIn(true);
-    showToast('🛡️ Sesión de Administrador iniciada correctamente');
-    return true;
+    if (!email || !password) {
+      showToast('⚠️ Ingresa correo y contraseña de administrador');
+      return false;
+    }
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanPass = password.trim();
+
+    // 1. Validar si es el administrador principal (por correo o credenciales de admin por defecto)
+    const isAdminEmail = 
+      cleanEmail === adminProfile.email.toLowerCase() ||
+      cleanEmail === 'softwareai569@gmail.com' ||
+      cleanEmail === 'admin@armariovirtual.com';
+    
+    // Contraseñas válidas para admin
+    const isValidAdminPass = 
+      cleanPass === 'admin123' ||
+      cleanPass === 'password123' ||
+      cleanPass === 'admin' ||
+      cleanPass === 'Adrian2026';
+
+    if (isAdminEmail && isValidAdminPass) {
+      setIsAdminLoggedIn(true);
+      showToast('🛡️ Sesión de Administrador iniciada correctamente');
+      return true;
+    }
+
+    // 2. Validar si es un empleado registrado
+    const emp = employees.find(
+      e => (e.email.toLowerCase() === cleanEmail || e.username.toLowerCase() === cleanEmail) &&
+           e.password === cleanPass &&
+           e.status === 'activo'
+    );
+
+    if (emp) {
+      setIsAdminLoggedIn(true);
+      showToast(`👨‍💼 Bienvenido, ${emp.name} (${emp.role})`);
+      return true;
+    }
+
+    showToast('❌ Credenciales de administrador o empleado incorrectas');
+    return false;
   };
 
   const adminLogout = () => {
@@ -348,7 +387,12 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           youtubeUrl: p.youtube_url || '',
           dateAdded: p.date_added
         }));
-        setProducts(mapped);
+        // Merge Supabase products with local products so locally created ones are never lost
+        setProducts(prev => {
+          const dbIds = new Set(mapped.map(m => m.id));
+          const localOnly = prev.filter(p => !dbIds.has(p.id));
+          return [...mapped, ...localOnly];
+        });
       }
     } catch (e) {
       console.log('Supabase products read skipped, using local fallback');
@@ -923,18 +967,21 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     } catch (e) {}
   };
 
-  const syncCustomerToSupabase = async (c: Customer) => {
+  const syncCustomerToSupabase = async (c: Customer): Promise<{ success: boolean; error?: string }> => {
     try {
-      const fullPayload = {
-        id: c.id,
+      const custId = c.id || `cust-${Date.now()}`;
+      // 1. Intento con todas las columnas
+      const fullPayload: any = {
+        id: custId,
         name: c.name,
         email: c.email,
         phone: c.phone || '',
+        password: c.password || '',
         registered_at: c.registeredAt || new Date().toISOString().split('T')[0],
         registered_date: c.registeredAt || new Date().toISOString().split('T')[0],
         total_orders: Number(c.totalOrders || 0),
         total_spent: Number(c.totalSpent || 0),
-        favorite_store: c.favoriteStore || '',
+        favorite_store: c.favoriteStore || 'Armario Virtual',
         status: c.status || 'activo',
         addresses: c.addresses || [],
         wishlist_product_ids: c.wishlistProductIds || [],
@@ -943,31 +990,60 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       let { error } = await supabase.from('customers').upsert(fullPayload);
 
-      // Fallback si la tabla no tiene algunas columnas opcionales
-      if (error && (error.code === '42703' || error.message.toLowerCase().includes('column'))) {
-        const basicPayload = {
-          id: c.id,
+      // Fallback 1: Si faltan columnas avanzadas en Supabase, reintentar con las 5 columnas básicas
+      if (error && (error.code === '42703' || error.code === 'PGRST204' || error.message.toLowerCase().includes('column') || error.message.toLowerCase().includes('schema'))) {
+        console.warn('Supabase customers: reintentando con campos básicos...', error.message);
+        const standardPayload = {
+          id: custId,
           name: c.name,
           email: c.email,
           phone: c.phone || '',
-          status: c.status || 'activo'
+          avatar_url: c.avatarUrl || ''
         };
-        const retryRes = await supabase.from('customers').upsert(basicPayload);
-        error = retryRes.error;
+        const retry1 = await supabase.from('customers').upsert(standardPayload);
+        error = retry1.error;
+      }
+
+      // 2. Sincronizar también con Supabase Auth si tiene credenciales
+      if (c.password && c.email) {
+        try {
+          const authRes = await supabase.auth.signUp({
+            email: c.email.trim().toLowerCase(),
+            password: c.password.length >= 6 ? c.password : `${c.password}123`,
+            options: {
+              data: {
+                name: c.name,
+                phone: c.phone || '',
+                favorite_store: c.favoriteStore || 'Armario Virtual'
+              }
+            }
+          });
+          if (authRes.error) {
+            console.log('Supabase Auth sync notice:', authRes.error.message);
+          }
+        } catch (authErr) {
+          console.log('Supabase Auth sync notice:', authErr);
+        }
       }
 
       if (error) {
         console.warn('Supabase customer sync error:', error.message);
-        if (error.code === '42501' || error.message.toLowerCase().includes('policy')) {
-          showToast('⚠️ Supabase RLS: Ejecuta el script SQL en Supabase para permitir guardar clientes');
+        const msg = (error.message || '').toLowerCase();
+        if (msg.includes('relation') && (msg.includes('does not exist') || error.code === '42P01')) {
+          showToast('⚠️ La tabla "customers" aún no existe en Supabase.');
+        } else if (error.code === '42501' || msg.includes('policy') || msg.includes('row-level security')) {
+          showToast('⚠️ Supabase RLS activo. Ejecuta el script SQL en Supabase para permitir guardar clientes.');
         } else {
-          showToast(`⚠️ Error al guardar cliente en Supabase: ${error.message}`);
+          console.warn('Error al guardar cliente en Supabase:', error.message);
         }
+        return { success: false, error: error.message };
       } else {
-        console.log('✅ Cliente sincronizado con Supabase:', c.email);
+        console.log('✅ Cliente guardado con éxito en Supabase:', c.email);
+        return { success: true };
       }
     } catch (e: any) {
       console.warn('Supabase customer sync exception:', e);
+      return { success: false, error: e.message || String(e) };
     }
   };
 
@@ -1142,13 +1218,13 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     localStorage.setItem(LS_CUSTOMERS_LIST, JSON.stringify(customersList));
   }, [customersList]);
 
-  const addCustomerAccount = (data: Omit<Customer, 'id'>) => {
+  const addCustomerAccount = async (data: Omit<Customer, 'id'>) => {
     const newCust: Customer = {
       ...data,
       id: `cust-${Date.now()}`
     };
     setCustomersList(prev => [newCust, ...prev]);
-    syncCustomerToSupabase(newCust);
+    await syncCustomerToSupabase(newCust);
     showToast(`👤 Cliente "${newCust.name}" registrado`);
   };
 
@@ -1295,6 +1371,22 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         };
         const retryRes = await supabase.from('products').upsert(standardPayload);
         error = retryRes.error;
+
+        if (error && (error.code === '42703' || error.message.toLowerCase().includes('column'))) {
+          const basicPayload = {
+            id: p.id,
+            name: p.name,
+            category: p.category,
+            subcategory: p.subcategory || 'General',
+            price: Number(p.price) || 0,
+            stock: Number(p.stock) || 0,
+            sku: p.sku || `SKU-${p.id}`,
+            images: p.images || [],
+            description: p.description || ''
+          };
+          const retryRes2 = await supabase.from('products').upsert(basicPayload);
+          error = retryRes2.error;
+        }
       }
 
       if (error) {
@@ -1468,7 +1560,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           name: c.name,
           email: c.email,
           phone: c.phone || '',
+          password: c.password || '',
           registered_at: c.registeredAt || new Date().toISOString().split('T')[0],
+          registered_date: c.registeredAt || new Date().toISOString().split('T')[0],
           total_orders: Number(c.totalOrders || 0),
           total_spent: Number(c.totalSpent || 0),
           favorite_store: c.favoriteStore || '',
@@ -1477,7 +1571,21 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           wishlist_product_ids: c.wishlistProductIds || [],
           avatar_url: c.avatarUrl || ''
         }));
-        const { error: custErr } = await supabase.from('customers').upsert(custPayload);
+        let { error: custErr } = await supabase.from('customers').upsert(custPayload);
+
+        // Fallback si la tabla no tiene algunas columnas extendidas
+        if (custErr && (custErr.code === '42703' || custErr.message.toLowerCase().includes('column'))) {
+          const basicCustPayload = customersList.map(c => ({
+            id: c.id,
+            name: c.name,
+            email: c.email,
+            phone: c.phone || '',
+            password: c.password || ''
+          }));
+          const retryRes = await supabase.from('customers').upsert(basicCustPayload);
+          custErr = retryRes.error;
+        }
+
         if (custErr) {
           hasError = true;
           details['customers'] = { success: false, error: custErr.message };
@@ -1486,6 +1594,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
       }
     } catch (e: any) {
+      hasError = true;
       details['customers'] = { success: false, error: e.message || String(e) };
     }
 
@@ -1650,10 +1759,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     if (existing) {
-      setCustomer(existing);
-      setIsCustomerLoggedIn(true);
-      showToast(`👋 ¡Hola de nuevo, ${existing.name}! Sesión iniciada.`);
-      return { success: true, customer: existing };
+      return {
+        success: false,
+        error: 'Ya existe una cuenta registrada con este correo electrónico. Por favor ve a la pestaña "Iniciar Sesión".'
+      };
     }
 
     const newAddresses: ShippingAddress[] = data.address ? [{
@@ -1691,9 +1800,13 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const customerLogin = async (email?: string, password?: string): Promise<{ success: boolean; error?: string }> => {
     if (!email || !email.trim()) {
-      return { success: false, error: 'Ingresa tu correo electrónico.' };
+      return { success: false, error: 'Por favor ingresa tu correo electrónico.' };
+    }
+    if (!password || !password.trim()) {
+      return { success: false, error: 'Por favor ingresa tu contraseña.' };
     }
     const cleanEmail = email.trim().toLowerCase();
+    const cleanPassword = password.trim();
 
     // 1. Search in local state
     let found = customersList.find(c => c.email.toLowerCase() === cleanEmail);
@@ -1708,6 +1821,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             name: dbCust.name,
             email: dbCust.email,
             phone: dbCust.phone || '',
+            password: dbCust.password || '',
             avatarUrl: dbCust.avatar_url || '',
             favoriteStore: dbCust.favorite_store || 'Armario Virtual',
             wishlistProductIds: typeof dbCust.wishlist_product_ids === 'string' ? JSON.parse(dbCust.wishlist_product_ids) : (dbCust.wishlist_product_ids || []),
@@ -1728,36 +1842,23 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (found.status === 'suspendido') {
         return { success: false, error: 'Esta cuenta se encuentra temporalmente suspendida. Contacta a soporte.' };
       }
+      
+      // Validación estricta de contraseña
+      if (found.password && found.password !== cleanPassword) {
+        return { success: false, error: 'Contraseña incorrecta. Verifica tus datos e intenta nuevamente.' };
+      }
+
       setCustomer(found);
       setIsCustomerLoggedIn(true);
       showToast(`🔑 ¡Hola de nuevo, ${found.name}!`);
       return { success: true };
     }
 
-    // Auto-create customer account on the fly if not existing
-    const generatedName = cleanEmail.split('@')[0].replace(/[._-]/g, ' ').toUpperCase();
-    const newCust: Customer = {
-      id: `cust-${Date.now()}`,
-      name: generatedName,
-      email: cleanEmail,
-      phone: '',
-      password: password || '',
-      avatarUrl: '',
-      favoriteStore: 'Armario Virtual',
-      wishlistProductIds: [],
-      registeredAt: new Date().toISOString().split('T')[0],
-      status: 'activo',
-      totalOrders: 0,
-      totalSpent: 0,
-      addresses: []
+    // Si el usuario no existe, NO crear cuenta automáticamente en login
+    return {
+      success: false,
+      error: 'No se encontró ninguna cuenta registrada con este correo electrónico. Por favor regístrate primero en la pestaña "Crear Cuenta".'
     };
-
-    setCustomer(newCust);
-    setIsCustomerLoggedIn(true);
-    setCustomersList(prev => [newCust, ...prev]);
-    await syncCustomerToSupabase(newCust);
-    showToast(`✨ ¡Bienvenido(a) a Armario Virtual!`);
-    return { success: true };
   };
 
   const customerLogout = () => {
@@ -1983,6 +2084,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       syncCustomerToSupabase(next);
       return next;
     });
+    setCustomersList(prev =>
+      prev.map(c => (c.email.toLowerCase() === email.toLowerCase() || c.id === customer.id ? { ...c, name, email, phone, favoriteStore } : c))
+    );
     showToast('Perfil actualizado correctamente');
   };
 
@@ -2292,6 +2396,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         addCustomerAccount,
         toggleCustomerStatus,
         deleteCustomerAccount,
+        syncCustomerToSupabase,
         products,
         orders,
         customer,
