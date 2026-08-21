@@ -372,40 +372,58 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     // 2. Products
     try {
       const { data: dbProducts, error } = await supabase.from('products').select('*');
-      if (!error && dbProducts && dbProducts.length > 0) {
-        const mapped: Product[] = dbProducts.map(p => ({
-          id: p.id,
-          name: p.name,
-          productType: p.product_type || 'sencillo',
-          category: p.category,
-          subcategory: p.subcategory || 'General',
-          price: Number(p.price),
-          originalPrice: p.original_price ? Number(p.original_price) : undefined,
-          isOffer: Boolean(p.is_offer),
-          offerPrice: p.offer_price ? Number(p.offer_price) : undefined,
-          discountPercentage: p.discount_percentage ? Number(p.discount_percentage) : 0,
-          stock: Number(p.stock),
-          sku: p.sku || '',
-          images: typeof p.images === 'string' ? JSON.parse(p.images) : p.images || [],
-          sizes: typeof p.sizes === 'string' ? JSON.parse(p.sizes) : p.sizes || [],
-          colors: typeof p.colors === 'string' ? JSON.parse(p.colors) : p.colors || [],
-          colorImages: typeof p.color_images === 'string' ? JSON.parse(p.color_images) : p.color_images || {},
-          variantStock: typeof p.variant_stock === 'string' ? JSON.parse(p.variant_stock) : (Array.isArray(p.variant_stock) ? p.variant_stock : []),
-          sizeGuide: typeof p.size_guide === 'string' ? JSON.parse(p.size_guide) : (p.size_guide || undefined),
-          sizeGuideTemplateId: p.size_guide_template_id || undefined,
-          description: p.description || '',
-          tags: typeof p.tags === 'string' ? JSON.parse(p.tags) : p.tags || [],
-          isFeatured: Boolean(p.is_featured),
-          isPublished: p.is_published !== false,
-          youtubeUrl: p.youtube_url || '',
-          dateAdded: p.date_added
-        }));
-        // Merge Supabase products with local products so locally created ones are never lost
-        setProducts(prev => {
-          const dbIds = new Set(mapped.map(m => m.id));
-          const localOnly = prev.filter(p => !dbIds.has(p.id));
-          return [...mapped, ...localOnly];
-        });
+      if (!error && dbProducts) {
+        if (dbProducts.length > 0) {
+          const mapped: Product[] = dbProducts.map(p => ({
+            id: p.id,
+            name: p.name,
+            productType: p.product_type || 'sencillo',
+            category: p.category,
+            subcategory: p.subcategory || 'General',
+            price: Number(p.price),
+            originalPrice: p.original_price ? Number(p.original_price) : undefined,
+            isOffer: Boolean(p.is_offer),
+            offerPrice: p.offer_price ? Number(p.offer_price) : undefined,
+            discountPercentage: p.discount_percentage ? Number(p.discount_percentage) : 0,
+            stock: Number(p.stock),
+            sku: p.sku || '',
+            images: typeof p.images === 'string' ? JSON.parse(p.images) : p.images || [],
+            sizes: typeof p.sizes === 'string' ? JSON.parse(p.sizes) : p.sizes || [],
+            colors: typeof p.colors === 'string' ? JSON.parse(p.colors) : p.colors || [],
+            colorImages: typeof p.color_images === 'string' ? JSON.parse(p.color_images) : p.color_images || {},
+            variantStock: typeof p.variant_stock === 'string' ? JSON.parse(p.variant_stock) : (Array.isArray(p.variant_stock) ? p.variant_stock : []),
+            sizeGuide: typeof p.size_guide === 'string' ? JSON.parse(p.size_guide) : (p.size_guide || undefined),
+            sizeGuideTemplateId: p.size_guide_template_id || undefined,
+            description: p.description || '',
+            tags: typeof p.tags === 'string' ? JSON.parse(p.tags) : p.tags || [],
+            isFeatured: Boolean(p.is_featured),
+            isPublished: p.is_published !== false,
+            youtubeUrl: p.youtube_url || '',
+            dateAdded: p.date_added
+          }));
+          // Merge Supabase products with local products so locally created ones are never lost
+          setProducts(prev => {
+            const dbIds = new Set(mapped.map(m => m.id));
+            const localOnly = prev.filter(p => !dbIds.has(p.id));
+            // Also sync localOnly products to Supabase in the background
+            localOnly.forEach(lp => syncProductToSupabase(lp));
+            return [...mapped, ...localOnly];
+          });
+        } else {
+          // Table exists but is empty: automatically push any local products to Supabase
+          const savedProductsRaw = localStorage.getItem('tienda_products_v3');
+          if (savedProductsRaw) {
+            try {
+              const localList: Product[] = JSON.parse(savedProductsRaw);
+              if (Array.isArray(localList) && localList.length > 0) {
+                console.log('Pushing local products to empty Supabase products table...', localList.length);
+                localList.forEach(lp => syncProductToSupabase(lp));
+              }
+            } catch (e) {
+              console.warn('Error reading local products for auto-sync', e);
+            }
+          }
+        }
       }
     } catch (e) {
       console.log('Supabase products read skipped, using local fallback');
