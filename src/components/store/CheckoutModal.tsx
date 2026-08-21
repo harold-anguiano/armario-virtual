@@ -654,9 +654,9 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, o
 
                   {/* Add Address Form */}
                   {showAddAddress || !customer.addresses || customer.addresses.length === 0 ? (
-                    <form onSubmit={handleCreateAddress} className="bg-gray-50 p-4 rounded-2xl border border-gray-200 space-y-3">
-                      <div className="flex items-center justify-between">
-                        <p className="text-xs font-bold text-gray-800">
+                    <form onSubmit={handleCreateAddress} className="bg-slate-50 p-4 sm:p-5 rounded-2xl border border-slate-200 space-y-4">
+                      <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+                        <p className="text-xs font-black text-slate-800 uppercase tracking-wide">
                           {!customer.addresses || customer.addresses.length === 0
                             ? 'Ingresa tu domicilio de entrega para continuar:'
                             : 'Agregar nuevo domicilio de entrega:'}
@@ -664,67 +664,159 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, o
                         <button
                           type="button"
                           onClick={handleFillTestAddress}
-                          className="text-[11px] font-bold text-amber-700 hover:text-amber-800 underline cursor-pointer"
+                          className="text-[11px] font-bold text-amber-700 hover:text-amber-800 underline flex items-center gap-1 cursor-pointer"
                         >
-                          Llenar datos de prueba
+                          <FlaskConical className="w-3 h-3 text-amber-600" />
+                          <span>Llenar datos de prueba</span>
                         </button>
                       </div>
-                      <div className="grid grid-cols-2 gap-2 text-xs">
-                        <input
-                          type="text"
-                          placeholder="Calle"
-                          value={newAddrForm.street}
-                          onChange={e => setNewAddrForm({ ...newAddrForm, street: e.target.value })}
-                          className="p-2 border rounded-lg bg-white"
-                          required
-                        />
-                        <input
-                          type="text"
-                          placeholder="Num Exterior"
-                          value={newAddrForm.exteriorNumber}
-                          onChange={e => setNewAddrForm({ ...newAddrForm, exteriorNumber: e.target.value })}
-                          className="p-2 border rounded-lg bg-white"
-                          required
-                        />
-                        <input
-                          type="text"
-                          placeholder="Colonia"
-                          value={newAddrForm.neighborhood}
-                          onChange={e => setNewAddrForm({ ...newAddrForm, neighborhood: e.target.value })}
-                          className="p-2 border rounded-lg bg-white"
-                        />
-                        <input
-                          type="text"
-                          placeholder="Código Postal (ej: 03940)"
-                          value={newAddrForm.postalCode}
-                          onChange={e => setNewAddrForm({ ...newAddrForm, postalCode: e.target.value })}
-                          className="p-2 border rounded-lg bg-white"
-                          required
-                        />
-                        <input
-                          type="text"
-                          placeholder="Alcaldía / Municipio"
-                          value={newAddrForm.city}
-                          onChange={e => setNewAddrForm({ ...newAddrForm, city: e.target.value })}
-                          className="p-2 border rounded-lg bg-white"
-                        />
-                        <input
-                          type="text"
-                          placeholder="Estado"
-                          value={newAddrForm.state}
-                          onChange={e => setNewAddrForm({ ...newAddrForm, state: e.target.value })}
-                          className="p-2 border rounded-lg bg-white"
-                        />
+
+                      <div className="space-y-3 text-xs">
+                        {/* Recipient Name */}
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">
+                            Nombre de quien recibe *
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="Nombre completo de quien recibe el paquete"
+                            value={newAddrForm.recipientName}
+                            onChange={e => setNewAddrForm({ ...newAddrForm, recipientName: e.target.value })}
+                            className="w-full p-2.5 bg-white border border-slate-200 rounded-xl font-medium focus:border-[#9E0D0D] outline-hidden"
+                            required
+                          />
+                        </div>
+
+                        {/* Calle y Número */}
+                        <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
+                          <div className="sm:col-span-7">
+                            <label className="block text-xs font-bold text-slate-700 mb-1">
+                              Calle y número *
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="Ej. Av. Insurgentes Sur, Calle Roble..."
+                              value={newAddrForm.street}
+                              onChange={e => setNewAddrForm({ ...newAddrForm, street: e.target.value })}
+                              className="w-full p-2.5 bg-white border border-slate-200 rounded-xl font-medium focus:border-[#9E0D0D] outline-hidden"
+                              required
+                            />
+                          </div>
+
+                          <div className="sm:col-span-3">
+                            <label className="block text-xs font-bold text-slate-700 mb-1">
+                              Núm. Exterior *
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="Ej. 1602, 45-B"
+                              value={newAddrForm.exteriorNumber}
+                              onChange={e => setNewAddrForm({ ...newAddrForm, exteriorNumber: e.target.value })}
+                              className="w-full p-2.5 bg-white border border-slate-200 rounded-xl font-medium focus:border-[#9E0D0D] outline-hidden"
+                              required
+                            />
+                          </div>
+
+                          <div className="sm:col-span-2">
+                            <label className="block text-xs font-bold text-slate-700 mb-1">
+                              Núm. Int <span className="font-normal text-slate-400">(Opc.)</span>
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="Ej. 302, Depto B"
+                              value={newAddrForm.interiorNumber}
+                              onChange={e => setNewAddrForm({ ...newAddrForm, interiorNumber: e.target.value })}
+                              className="w-full p-2.5 bg-white border border-slate-200 rounded-xl font-medium focus:border-[#9E0D0D] outline-hidden"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Colonia & Código Postal */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">
+                              Colonia *
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="Ej. Crédito Constructor, Del Valle, Centro..."
+                              value={newAddrForm.neighborhood}
+                              onChange={e => setNewAddrForm({ ...newAddrForm, neighborhood: e.target.value })}
+                              className="w-full p-2.5 bg-white border border-slate-200 rounded-xl font-medium focus:border-[#9E0D0D] outline-hidden"
+                              required
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">
+                              Código Postal *
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="Ej. 03940 (5 dígitos)"
+                              value={newAddrForm.postalCode}
+                              onChange={e => setNewAddrForm({ ...newAddrForm, postalCode: e.target.value })}
+                              className="w-full p-2.5 bg-white border border-slate-200 rounded-xl font-medium focus:border-[#9E0D0D] outline-hidden"
+                              required
+                            />
+                          </div>
+                        </div>
+
+                        {/* Municipio / Alcaldía & Estado */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">
+                              Municipio / Alcaldía *
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="Ej. Benito Juárez, Zapopan, Monterrey..."
+                              value={newAddrForm.city}
+                              onChange={e => setNewAddrForm({ ...newAddrForm, city: e.target.value })}
+                              className="w-full p-2.5 bg-white border border-slate-200 rounded-xl font-medium focus:border-[#9E0D0D] outline-hidden"
+                              required
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">
+                              Estado *
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="Ej. CDMX, Jalisco, Nuevo León, Edomex..."
+                              value={newAddrForm.state}
+                              onChange={e => setNewAddrForm({ ...newAddrForm, state: e.target.value })}
+                              className="w-full p-2.5 bg-white border border-slate-200 rounded-xl font-medium focus:border-[#9E0D0D] outline-hidden"
+                              required
+                            />
+                          </div>
+                        </div>
+
+                        {/* Teléfono */}
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">
+                            Teléfono de Contacto <span className="font-normal text-slate-400">(Para paquetería)</span>
+                          </label>
+                          <input
+                            type="tel"
+                            placeholder="Ej. 55 1234 5678"
+                            value={newAddrForm.phone}
+                            onChange={e => setNewAddrForm({ ...newAddrForm, phone: e.target.value })}
+                            className="w-full p-2.5 bg-white border border-slate-200 rounded-xl font-medium focus:border-[#9E0D0D] outline-hidden"
+                          />
+                        </div>
                       </div>
-                      <div className="flex gap-2 pt-2">
-                        <button type="submit" className="bg-[#9E0D0D] text-white text-xs font-bold px-4 py-2 rounded-xl cursor-pointer">
+
+                      <div className="flex gap-2 pt-2 border-t border-slate-200">
+                        <button type="submit" className="bg-[#9E0D0D] hover:bg-red-900 text-white text-xs font-bold px-5 py-2.5 rounded-xl shadow-md transition-all cursor-pointer">
                           Guardar y Usar Dirección
                         </button>
                         {customer.addresses && customer.addresses.length > 0 && (
                           <button
                             type="button"
                             onClick={() => setShowAddAddress(false)}
-                            className="bg-gray-200 text-gray-700 text-xs font-bold px-4 py-2 rounded-xl cursor-pointer"
+                            className="bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer"
                           >
                             Cancelar
                           </button>

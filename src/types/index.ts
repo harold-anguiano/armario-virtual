@@ -112,6 +112,7 @@ export interface ShippingAddress {
 export interface Order {
   id: string;
   orderNumber: string;
+  customerId?: string;
   customerName: string;
   customerEmail: string;
   customerPhone: string;

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import {
   Product,
   Order,
@@ -32,6 +32,7 @@ import {
 } from '../data/initialData';
 import { getProductEffectivePrice, getProductColorImage } from '../utils/cartHelpers';
 import { supabase } from '../lib/supabase';
+import { playNotificationSound } from '../utils/audioNotification';
 
 interface StoreContextType {
   // Role & Navigation Persistence
@@ -151,6 +152,18 @@ interface StoreContextType {
   addPromoFlyer: (flyer: Omit<StoreDesignConfig['promotionalFlyers'][0], 'id'>) => void;
   updatePromoFlyer: (id: string, flyer: Partial<StoreDesignConfig['promotionalFlyers'][0]>) => void;
   deletePromoFlyer: (id: string) => void;
+
+  // Live Notifications, Audio & Popups
+  newSalePopupOrder: Order | null;
+  dismissNewSalePopup: () => void;
+  customerStatusPopup: { order: Order; oldStatus: string; newStatus: string } | null;
+  dismissCustomerStatusPopup: () => void;
+  triggerTestNewSaleNotification: () => void;
+  triggerTestCustomerStatusNotification: (status?: OrderStatus) => void;
+  pendingOrdersCount: number;
+  customerActiveOrdersCount: number;
+  unreadSalesCount: number;
+  clearUnreadSalesCount: () => void;
 
   // Toast / Feedback
   toastMessage: string | null;
@@ -554,7 +567,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   useEffect(() => {
-    loadAllFromSupabase();
+    loadAllFromSupabase().then(() => {
+      setTimeout(() => {
+        isInitialLoadCompleted.current = true;
+      }, 800);
+    });
 
     // Supabase Realtime Channel Subscription
     const channel = supabase
@@ -589,21 +606,48 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               if (prev.some(x => x.id === mappedOrder.id)) return prev;
               return [mappedOrder, ...prev];
             });
+
+            if (isInitialLoadCompleted.current) {
+              playNotificationSound();
+              setNewSalePopupOrder(mappedOrder);
+              setUnreadSalesCount(prev => prev + 1);
+            }
           } else if (payload.eventType === 'UPDATE') {
             const o = payload.new as any;
-            setOrders(prev =>
-              prev.map(x =>
-                x.id === o.id
-                  ? {
-                      ...x,
-                      status: o.status,
-                      shippingProvider: o.shipping_provider || x.shippingProvider,
-                      trackingNumber: o.tracking_number || x.trackingNumber,
-                      statusHistory: typeof o.status_history === 'string' ? JSON.parse(o.status_history) : (o.status_history || x.statusHistory)
-                    }
-                  : x
-              )
-            );
+            const existingOrder = ordersRef.current.find(x => x.id === o.id);
+            const oldStatus = existingOrder ? existingOrder.status : '';
+
+            const mappedUpdated: Order = {
+              id: o.id,
+              orderNumber: o.order_number || existingOrder?.orderNumber || '',
+              customerName: o.customer_name || existingOrder?.customerName || '',
+              customerEmail: o.customer_email || existingOrder?.customerEmail || '',
+              customerPhone: o.customer_phone || existingOrder?.customerPhone || '',
+              shippingAddress: typeof o.shipping_address === 'string' ? JSON.parse(o.shipping_address) : (o.shipping_address || existingOrder?.shippingAddress || {}),
+              items: typeof o.items === 'string' ? JSON.parse(o.items) : (o.items || existingOrder?.items || []),
+              subtotal: Number(o.subtotal ?? existingOrder?.subtotal ?? 0),
+              shippingCost: Number(o.shipping_cost ?? existingOrder?.shippingCost ?? 0),
+              discountAmount: Number(o.discount_amount ?? existingOrder?.discountAmount ?? 0),
+              total: Number(o.total ?? existingOrder?.total ?? 0),
+              status: o.status,
+              paymentMethod: o.payment_method || existingOrder?.paymentMethod || '',
+              shippingProvider: o.shipping_provider || existingOrder?.shippingProvider || '',
+              trackingNumber: o.tracking_number || existingOrder?.trackingNumber || '',
+              createdAt: o.created_at || existingOrder?.createdAt || '',
+              estimatedDelivery: o.estimated_delivery || existingOrder?.estimatedDelivery || '',
+              statusHistory: typeof o.status_history === 'string' ? JSON.parse(o.status_history) : (o.status_history || existingOrder?.statusHistory || [])
+            };
+
+            setOrders(prev => prev.map(x => (x.id === o.id ? mappedUpdated : x)));
+
+            if (isInitialLoadCompleted.current && oldStatus && oldStatus !== o.status) {
+              playNotificationSound();
+              setCustomerStatusPopup({
+                order: mappedUpdated,
+                oldStatus,
+                newStatus: o.status
+              });
+            }
           }
         }
       )
@@ -723,7 +767,71 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       )
       .subscribe();
 
+    // Background live poller (every 4s) to ensure zero-refresh detection across tabs & devices
+    const pollTimer = setInterval(async () => {
+      if (!isInitialLoadCompleted.current) return;
+      try {
+        const { data: dbOrders, error } = await supabase.from('orders').select('*');
+        if (!error && Array.isArray(dbOrders) && dbOrders.length > 0) {
+          const currentKnownIds = new Set(ordersRef.current.map(o => o.id));
+          const currentOrdersMap = new Map(ordersRef.current.map(o => [o.id, o]));
+
+          let foundNewOrder: Order | null = null;
+          const mappedOrdersList: Order[] = [];
+
+          for (const o of dbOrders) {
+            const mappedOrder: Order = {
+              id: o.id,
+              orderNumber: o.order_number,
+              customerName: o.customer_name || '',
+              customerEmail: o.customer_email || '',
+              customerPhone: o.customer_phone || '',
+              shippingAddress: typeof o.shipping_address === 'string' ? JSON.parse(o.shipping_address) : (o.shipping_address || {}),
+              items: typeof o.items === 'string' ? JSON.parse(o.items) : (o.items || []),
+              subtotal: Number(o.subtotal || 0),
+              shippingCost: Number(o.shipping_cost || 0),
+              discountAmount: Number(o.discount_amount || 0),
+              total: Number(o.total || 0),
+              status: o.status,
+              paymentMethod: o.payment_method || '',
+              shippingProvider: o.shipping_provider || '',
+              trackingNumber: o.tracking_number || '',
+              createdAt: o.created_at,
+              estimatedDelivery: o.estimated_delivery || '',
+              statusHistory: typeof o.status_history === 'string' ? JSON.parse(o.status_history) : (o.status_history || [])
+            };
+
+            if (!currentKnownIds.has(o.id)) {
+              foundNewOrder = mappedOrder;
+            } else {
+              const prev = currentOrdersMap.get(o.id);
+              if (prev && prev.status !== o.status) {
+                // Status changed in DB!
+                playNotificationSound();
+                setCustomerStatusPopup({
+                  order: mappedOrder,
+                  oldStatus: prev.status,
+                  newStatus: o.status
+                });
+              }
+            }
+            mappedOrdersList.push(mappedOrder);
+          }
+
+          if (foundNewOrder) {
+            playNotificationSound();
+            setNewSalePopupOrder(foundNewOrder);
+            setUnreadSalesCount(prev => prev + 1);
+            setOrders(mappedOrdersList);
+          }
+        }
+      } catch (e) {
+        // Silent poll error
+      }
+    }, 4000);
+
     return () => {
+      clearInterval(pollTimer);
       supabase.removeChannel(channel);
     };
   }, [loadAllFromSupabase]);
@@ -1326,6 +1434,145 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [cartOpen, setCartOpen] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  // Live Notifications, Audio & Realtime state
+  const [newSalePopupOrder, setNewSalePopupOrder] = useState<Order | null>(null);
+  const [customerStatusPopup, setCustomerStatusPopup] = useState<{ order: Order; oldStatus: string; newStatus: string } | null>(null);
+  const [unreadSalesCount, setUnreadSalesCount] = useState<number>(0);
+  const isInitialLoadCompleted = useRef<boolean>(false);
+  const ordersRef = useRef<Order[]>(orders);
+  const customerRef = useRef<Customer>(customer);
+
+  useEffect(() => {
+    ordersRef.current = orders;
+  }, [orders]);
+
+  useEffect(() => {
+    customerRef.current = customer;
+  }, [customer]);
+
+  const dismissNewSalePopup = useCallback(() => {
+    setNewSalePopupOrder(null);
+  }, []);
+
+  const dismissCustomerStatusPopup = useCallback(() => {
+    setCustomerStatusPopup(null);
+  }, []);
+
+  const clearUnreadSalesCount = useCallback(() => {
+    setUnreadSalesCount(0);
+  }, []);
+
+  const showToast = useCallback((msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => {
+      setToastMessage(null);
+    }, 3500);
+  }, []);
+
+  // Pending and active orders badge counters
+  const pendingOrdersCount = orders.filter(o => o.status === 'pendiente' || o.status === 'en_preparacion').length;
+  const customerActiveOrdersCount = orders.filter(
+    o => o.customerEmail?.toLowerCase() === customer.email?.toLowerCase() && o.status !== 'entregado' && o.status !== 'cancelado'
+  ).length;
+
+  // Test triggers for Admin & Customer notifications
+  const triggerTestNewSaleNotification = useCallback(() => {
+    const demoOrder: Order = ordersRef.current[0] || {
+      id: `ord-test-${Date.now()}`,
+      orderNumber: `SUB-2026-${Math.floor(1000 + Math.random() * 9000)}`,
+      customerName: 'Cynthia Roque De Lucio',
+      customerEmail: 'cynthia90@hotmail.com',
+      customerPhone: '5624222449',
+      shippingAddress: {
+        id: 'addr-demo',
+        recipientName: 'Cynthia Roque De Lucio',
+        street: 'Av. Insurgentes Sur',
+        exteriorNumber: '1602',
+        interiorNumber: 'Piso 4',
+        neighborhood: 'Crédito Constructor',
+        city: 'Benito Juárez',
+        state: 'CDMX',
+        postalCode: '03940',
+        phone: '5624222449',
+        isDefault: true
+      },
+      items: [
+        {
+          productId: 'prod-demo-1',
+          productName: 'Vestido Midi Floral Primavera',
+          productImage: 'https://images.unsplash.com/photo-1572804013309-59a88b7e92f1?w=300&auto=format&fit=crop&q=60',
+          price: 649,
+          quantity: 1,
+          size: 'M',
+          color: 'Floral'
+        }
+      ],
+      subtotal: 649,
+      shippingCost: 79,
+      discountAmount: 0,
+      total: 728,
+      status: 'en_preparacion',
+      paymentMethod: 'Modo Compra Ficticia (Sandbox)',
+      shippingProvider: 'SubuEntrega Exprés',
+      trackingNumber: 'SE-789012-MX',
+      createdAt: new Date().toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' }),
+      estimatedDelivery: '3 a 5 días hábiles',
+      statusHistory: [
+        {
+          status: 'en_preparacion',
+          timestamp: new Date().toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' }),
+          note: 'Venta de prueba creada para verificar alertas y sonido'
+        }
+      ]
+    };
+    playNotificationSound();
+    setNewSalePopupOrder(demoOrder);
+    setUnreadSalesCount(prev => prev + 1);
+    showToast('🔔 ¡Sonido y Notificación de Nueva Venta activados!');
+  }, [showToast]);
+
+  const triggerTestCustomerStatusNotification = useCallback((targetStatus: OrderStatus = 'enviado') => {
+    const demoOrder: Order = ordersRef.current[0] || {
+      id: `ord-test-${Date.now()}`,
+      orderNumber: `SUB-2026-9042`,
+      customerName: customerRef.current.name || 'Cynthia Roque De Lucio',
+      customerEmail: customerRef.current.email || 'cynthia90@hotmail.com',
+      customerPhone: '5624222449',
+      shippingAddress: {
+        id: 'addr-demo',
+        recipientName: 'Cynthia Roque De Lucio',
+        street: 'Av. Insurgentes Sur',
+        exteriorNumber: '1602',
+        interiorNumber: 'Piso 4',
+        neighborhood: 'Crédito Constructor',
+        city: 'Benito Juárez',
+        state: 'CDMX',
+        postalCode: '03940',
+        phone: '5624222449',
+        isDefault: true
+      },
+      items: [],
+      subtotal: 649,
+      shippingCost: 0,
+      discountAmount: 0,
+      total: 649,
+      status: targetStatus,
+      paymentMethod: 'Tarjeta de Crédito / Ficticia',
+      shippingProvider: 'SubuEntrega Exprés',
+      trackingNumber: 'SE-893021-MX',
+      createdAt: new Date().toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' }),
+      estimatedDelivery: '2 a 3 días hábiles',
+      statusHistory: []
+    };
+    playNotificationSound();
+    setCustomerStatusPopup({
+      order: { ...demoOrder, status: targetStatus, trackingNumber: 'SE-893021-MX', shippingProvider: 'SubuEntrega Exprés' },
+      oldStatus: 'en_preparacion',
+      newStatus: targetStatus
+    });
+    showToast(`🔔 Notificación sonora de Estatus de Pedido (${targetStatus.toUpperCase()}) enviada`);
+  }, [showToast]);
+
   // Safe localStorage Syncing
   useEffect(() => {
     try {
@@ -1889,13 +2136,6 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     showToast('Sesión de cliente cerrada');
   };
 
-  const showToast = (msg: string) => {
-    setToastMessage(msg);
-    setTimeout(() => {
-      setToastMessage(null);
-    }, 3500);
-  };
-
   // Cart operations
   const addToCart = (product: Product, size?: string, color?: string, qty: number = 1) => {
     const chosenSize = size || (product.sizes.length > 0 ? product.sizes[0] : 'Única');
@@ -2020,6 +2260,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     setOrders(prev => [newOrder, ...prev]);
     syncOrderToSupabase(newOrder);
+
+    // Trigger instant real-time sound and new sale popup
+    playNotificationSound();
+    setNewSalePopupOrder(newOrder);
+    setUnreadSalesCount(prev => prev + 1);
 
     // Update product stock and variant stock
     setProducts(prevProducts => {
@@ -2208,9 +2453,13 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Admin Order Operations
   const updateOrderStatus = (orderId: string, newStatus: OrderStatus, note?: string) => {
+    let updatedOrderRef: Order | null = null;
+    let oldStatusRef: string = '';
+
     setOrders(prev => {
       const next = prev.map(ord => {
         if (ord.id === orderId) {
+          oldStatusRef = ord.status;
           const timestamp = new Date().toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' });
           const newHistory = [
             ...ord.statusHistory,
@@ -2225,6 +2474,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             status: newStatus,
             statusHistory: newHistory
           };
+          updatedOrderRef = updatedOrd;
           syncOrderToSupabase(updatedOrd);
           return updatedOrd;
         }
@@ -2232,19 +2482,34 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       });
       return next;
     });
+
+    playNotificationSound();
+    if (updatedOrderRef) {
+      setCustomerStatusPopup({
+        order: updatedOrderRef,
+        oldStatus: oldStatusRef,
+        newStatus
+      });
+    }
     showToast(`Pedido #${orderId} modificado a ${newStatus.toUpperCase()}`);
   };
 
   const assignOrderTracking = (orderId: string, provider: string, trackingNum: string) => {
+    let updatedOrderRef: Order | null = null;
+    let oldStatusRef: string = '';
+
     setOrders(prev => {
       const next = prev.map(ord => {
         if (ord.id === orderId) {
+          oldStatusRef = ord.status;
+          const newStatus: OrderStatus = ord.status === 'pendiente' ? 'enviado' : ord.status;
           const updatedOrd: Order = {
             ...ord,
             shippingProvider: provider,
             trackingNumber: trackingNum,
-            status: ord.status === 'pendiente' ? 'enviado' : ord.status
+            status: newStatus
           };
+          updatedOrderRef = updatedOrd;
           syncOrderToSupabase(updatedOrd);
           return updatedOrd;
         }
@@ -2252,6 +2517,15 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       });
       return next;
     });
+
+    playNotificationSound();
+    if (updatedOrderRef) {
+      setCustomerStatusPopup({
+        order: updatedOrderRef,
+        oldStatus: oldStatusRef,
+        newStatus: (updatedOrderRef as Order).status
+      });
+    }
     showToast('Guía de rastreo asignada al pedido');
   };
 
@@ -2461,6 +2735,16 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         deletePromoFlyer,
         toastMessage,
         showToast,
+        newSalePopupOrder,
+        dismissNewSalePopup,
+        customerStatusPopup,
+        dismissCustomerStatusPopup,
+        unreadSalesCount,
+        clearUnreadSalesCount,
+        pendingOrdersCount,
+        customerActiveOrdersCount,
+        triggerTestNewSaleNotification,
+        triggerTestCustomerStatusNotification,
         seedAllDataToSupabase,
         reloadFromSupabase,
         resetToDefaultData
