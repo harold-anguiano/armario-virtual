@@ -98,6 +98,7 @@ interface StoreContextType {
   addCustomerAccount: (customerData: Omit<Customer, 'id'>) => void;
   toggleCustomerStatus: (id: string) => void;
   deleteCustomerAccount: (id: string) => void;
+  updateCustomerRole: (customerId: string, newRole: string) => Promise<{ success: boolean; error?: string }>;
   syncCustomerToSupabase: (customer: Customer) => Promise<{ success: boolean; error?: string }>;
 
   // Store Data
@@ -130,6 +131,7 @@ interface StoreContextType {
 
   // Admin Product Operations
   addProduct: (product: Omit<Product, 'id' | 'dateAdded'>) => void;
+  duplicateProduct: (id: string) => Promise<Product | null>;
   updateProduct: (id: string, product: Partial<Product>) => void;
   deleteProduct: (id: string) => void;
   clearSampleProducts: () => Promise<void>;
@@ -473,6 +475,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           totalSpent: Number(c.total_spent || 0),
           favoriteStore: c.favorite_store || '',
           status: (c.status === 'activo' || c.status === 'suspendido' || c.status === 'inactivo') ? c.status : 'activo',
+          role: c.role || 'cliente',
           addresses: typeof c.addresses === 'string' ? JSON.parse(c.addresses) : (c.addresses || []),
           wishlistProductIds: typeof c.wishlist_product_ids === 'string' ? JSON.parse(c.wishlist_product_ids) : (c.wishlist_product_ids || []),
           avatarUrl: c.avatar_url || ''
@@ -1109,6 +1112,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         total_spent: Number(c.totalSpent || 0),
         favorite_store: c.favoriteStore || 'Armario Virtual',
         status: c.status || 'activo',
+        role: c.role || 'cliente',
         addresses: c.addresses || [],
         wishlist_product_ids: c.wishlistProductIds || [],
         avatar_url: c.avatarUrl || ''
@@ -1397,6 +1401,73 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setCustomersList(prev => prev.filter(c => c.id !== id));
     deleteCustomerFromSupabase(id);
     showToast('Usuario cliente eliminado');
+  };
+
+  const updateCustomerRole = async (customerId: string, newRole: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      let targetName = 'Usuario';
+      let targetCust: Customer | undefined;
+      setCustomersList(prev =>
+        prev.map(c => {
+          if (c.id === customerId) {
+            targetName = c.name;
+            targetCust = { ...c, role: newRole };
+            return targetCust;
+          }
+          return c;
+        })
+      );
+
+      // Si es el cliente logueado actualmente, actualizar su sesión
+      if (customer.id === customerId) {
+        setCustomer(prev => {
+          const next = { ...prev, role: newRole };
+          try {
+            localStorage.setItem(LS_CUSTOMER, JSON.stringify(next));
+          } catch (e) {}
+          return next;
+        });
+      }
+
+      // Sincronizar actualización en Supabase
+      if (targetCust) {
+        await syncCustomerToSupabase(targetCust);
+      } else {
+        await supabase.from('customers').update({ role: newRole }).eq('id', customerId);
+      }
+
+      // Si se promueve a rol administrativo / empleado, sincronizar con equipo de empleados
+      if (targetCust && (newRole === 'admin' || newRole === 'gerente' || newRole === 'empleado' || newRole === 'soporte')) {
+        const existingEmp = employees.find(e => e.email.toLowerCase() === targetCust!.email.toLowerCase());
+        if (!existingEmp) {
+          const roleTitleMap: Record<string, string> = {
+            admin: 'Administrador General',
+            gerente: 'Gerente de Tienda',
+            empleado: 'Ventas / Mostrador',
+            soporte: 'Atención al Cliente'
+          };
+          const newEmp: Employee = {
+            id: `emp-${Date.now()}`,
+            name: targetCust.name,
+            email: targetCust.email,
+            username: targetCust.email.split('@')[0],
+            role: roleTitleMap[newRole] || 'Colaborador',
+            status: 'activo',
+            permissions: newRole === 'admin' ? ['products', 'orders', 'customers', 'design', 'settings', 'metrics', 'shipping'] : ['products', 'orders', 'customers'],
+            createdAt: new Date().toISOString().split('T')[0],
+            avatarUrl: targetCust.avatarUrl
+          };
+          addEmployee(newEmp);
+        }
+      }
+
+      showToast(`👑 Rol de "${targetName}" actualizado a "${newRole.toUpperCase()}" en Supabase`);
+      return { success: true };
+    } catch (err: any) {
+      console.error('Error al actualizar rol de usuario:', err);
+      showToast(`⚠️ Error al actualizar rol: ${err.message || err}`);
+      return { success: false, error: err.message || String(err) };
+    }
   };
 
   // Main state with localStorage lazy init
@@ -1852,6 +1923,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           total_spent: Number(c.totalSpent || 0),
           favorite_store: c.favoriteStore || '',
           status: c.status || 'activo',
+          role: c.role || 'cliente',
           addresses: c.addresses || [],
           wishlist_product_ids: c.wishlistProductIds || [],
           avatar_url: c.avatarUrl || ''
@@ -2399,6 +2471,30 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     showToast(`✅ Producto "${newProd.name}" registrado en inventario y Supabase`);
   };
 
+  const duplicateProduct = async (id: string): Promise<Product | null> => {
+    const original = products.find(p => p.id === id);
+    if (!original) {
+      showToast('⚠️ No se encontró el producto a duplicar');
+      return null;
+    }
+
+    const timestamp = Date.now();
+    const newSku = original.sku ? `${original.sku}-COPIA` : `SKU-${timestamp.toString().slice(-6)}`;
+    const duplicated: Product = {
+      ...original,
+      id: `prod-${timestamp}`,
+      name: `${original.name} (Copia)`,
+      sku: newSku,
+      dateAdded: new Date().toISOString().split('T')[0],
+      isPublished: false // Creado como borrador para revisión antes de publicar
+    };
+
+    setProducts(prev => [duplicated, ...prev]);
+    await syncProductToSupabase(duplicated);
+    showToast(`📋 Producto duplicado exitosamente: "${duplicated.name}" (Borrador)`);
+    return duplicated;
+  };
+
   const updateProduct = async (id: string, updated: Partial<Product>) => {
     let target: Product | undefined;
     setProducts(prev => {
@@ -2716,6 +2812,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         addCustomerAccount,
         toggleCustomerStatus,
         deleteCustomerAccount,
+        updateCustomerRole,
         syncCustomerToSupabase,
         products,
         orders,
@@ -2735,6 +2832,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         addCustomerAddress,
         updateCustomerProfile,
         addProduct,
+        duplicateProduct,
         updateProduct,
         deleteProduct,
         clearSampleProducts,

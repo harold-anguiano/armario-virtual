@@ -313,6 +313,7 @@ CREATE TABLE IF NOT EXISTS public.customers (
     email TEXT NOT NULL,
     phone TEXT,
     password TEXT,
+    role TEXT DEFAULT 'cliente',
     registered_at TEXT,
     registered_date TEXT,
     total_orders NUMERIC DEFAULT 0,
@@ -326,6 +327,7 @@ CREATE TABLE IF NOT EXISTS public.customers (
 );
 
 -- Garantizar que existan todas las columnas en customers
+ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'cliente';
 ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS registered_at TEXT;
 ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS registered_date TEXT;
 ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS password TEXT;

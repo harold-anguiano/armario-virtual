@@ -147,6 +147,7 @@ export interface Customer {
   wishlistProductIds: string[];
   registeredAt: string;
   status?: 'activo' | 'suspendido' | 'inactivo';
+  role?: 'cliente' | 'admin' | 'gerente' | 'empleado' | 'soporte' | string;
   totalOrders?: number;
   totalSpent?: number;
 }
